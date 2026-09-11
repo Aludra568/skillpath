@@ -201,6 +201,8 @@ class MeetingUpdate(BaseModel):
     title: str | None = None
     notes_md: str | None = None
     is_held: bool | None = None
+    # Явная дата проведения: встречу могли провести раньше, чем занесли в систему.
+    held_at: datetime | None = None
 
 
 class MarkIn(BaseModel):

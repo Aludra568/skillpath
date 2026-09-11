@@ -106,7 +106,10 @@ def edit_meeting(
     if data.notes_md is not None:
         meeting.notes_md = data.notes_md
     if data.is_held is not None:
-        meeting.held_at = datetime.now(timezone.utc) if data.is_held else None
+        # Если дату проведения указали явно — берём её, иначе считаем, что встреча идёт сейчас.
+        meeting.held_at = (data.held_at or datetime.now(timezone.utc)) if data.is_held else None
+    elif data.held_at is not None:
+        meeting.held_at = data.held_at
     db.commit()
     db.refresh(meeting)
     return meeting_out(meeting)

@@ -229,7 +229,7 @@ def meeting(employee, reviewer_token, day, notes, marks, link=None, issue=None):
                  {"plan_item_id": item["id"], "is_confirmed": confirmed, "comment": comment}, reviewer_token)
     if link:
         call("POST", f"/api/meetings/{m['id']}/links", {"title": link[0], "url": link[1]}, reviewer_token)
-    call("PATCH", f"/api/meetings/{m['id']}", {"is_held": True}, reviewer_token)
+    call("PATCH", f"/api/meetings/{m['id']}", {"is_held": True, "held_at": dt(day)}, reviewer_token)
     if issue:
         body = {"comment": issue[0], "meeting_id": m["id"]}
         if issue[1]:
@@ -244,6 +244,12 @@ lead = call("POST", "/api/auth/login", {"email": "ershov@rost.dev", "password": 
 sub_lead = call("POST", "/api/auth/login", {"email": "kovalev@rost.dev", "password": PASSWORD})["access_token"]
 front_lead = call("POST", "/api/auth/login", {"email": "soloveva@rost.dev", "password": PASSWORD})["access_token"]
 qa_lead = call("POST", "/api/auth/login", {"email": "belova@rost.dev", "password": PASSWORD})["access_token"]
+
+# Если стенд уже наполняли раньше, поправим датировку проведённых встреч.
+for m in call("GET", "/api/meetings", token=owner) or []:
+    if m["held_at"] and m["held_at"][:10] != m["scheduled_at"][:10]:
+        call("PATCH", f"/api/meetings/{m['id']}", {"held_at": m["scheduled_at"]}, owner)
+        print("поправлена дата проведения встречи", m["id"])
 
 existing_meetings = call("GET", "/api/meetings", token=owner) or []
 if len(existing_meetings) < 3:
