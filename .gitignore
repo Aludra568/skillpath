@@ -3,7 +3,7 @@ __pycache__/
 .venv/
 venv/
 node_modules/
-frontend/dist/
+# frontend/dist собирается локально и едет на сервер через git — не игнорируем
 data/
 *.db
 .env
