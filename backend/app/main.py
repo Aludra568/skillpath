@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
 from .db import Base, engine
+from .migrate import ensure_company_columns
 from .routers import analytics, auth, catalog, departments, meetings, plans, users
 
 settings = get_settings()
