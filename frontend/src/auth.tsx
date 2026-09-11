@@ -1,14 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 
-import { api, getToken, setToken, type Me } from './api'
-
-interface RegisterData {
-  email: string
-  full_name: string
-  password: string
-  position: string
-}
+import { api, getToken, setToken, type Me, type RegisterData } from './api'
 
 interface AuthState {
   me: Me | null

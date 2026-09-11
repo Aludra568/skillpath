@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..access import managed_department_ids, subtree_ids, visible_user_ids
+from ..access import company_departments, managed_department_ids, subtree_ids, visible_user_ids
 from ..db import get_db
 from ..deps import check_view, current_user
 from ..models import Department, Issue, Meeting, Plan, PlanItem, User
@@ -26,13 +26,11 @@ def aware(value: datetime) -> datetime:
 def departments_stats(db: Session = Depends(get_db), actor: User = Depends(current_user)):
     """Сводка по каждому подразделению в зоне ответственности."""
     allowed = managed_department_ids(db, actor)
-    departments = db.scalars(select(Department).order_by(Department.name)).all()
-    if allowed is not None:
-        departments = [d for d in departments if d.id in allowed]
+    departments = [d for d in company_departments(db, actor.company_id) if d.id in allowed]
 
     result = []
     for department in departments:
-        ids = subtree_ids(db, department.id)
+        ids = subtree_ids(db, actor.company_id, department.id)
         users = list(db.scalars(select(User).where(User.department_id.in_(ids))).all())
         progress = progress_for_users(db, [u.id for u in users])
         held = db.scalars(
@@ -118,10 +116,10 @@ def events(
     allowed = visible_user_ids(db, actor)
 
     meetings_query = select(Meeting).where(
-        Meeting.scheduled_at >= start, Meeting.scheduled_at <= end
+        Meeting.scheduled_at >= start,
+        Meeting.scheduled_at <= end,
+        Meeting.employee_id.in_(allowed or {-1}),
     )
-    if allowed is not None:
-        meetings_query = meetings_query.where(Meeting.employee_id.in_(allowed or {-1}))
 
     result: list[Event] = []
     for meeting in db.scalars(meetings_query).all():
@@ -142,10 +140,12 @@ def events(
         .join(Plan, Plan.id == PlanItem.plan_id)
         .where(PlanItem.target_date >= today, PlanItem.target_date <= until)
     )
-    if allowed is not None:
-        items_query = items_query.where(Plan.user_id.in_(allowed or {-1}))
+    items_query = items_query.where(Plan.user_id.in_(allowed or {-1}))
 
-    users = {u.id: u.full_name for u in db.scalars(select(User)).all()}
+    users = {
+        u.id: u.full_name
+        for u in db.scalars(select(User).where(User.company_id == actor.company_id)).all()
+    }
     for item, owner_id in db.execute(items_query).all():
         result.append(
             Event(

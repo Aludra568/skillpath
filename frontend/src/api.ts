@@ -118,10 +118,30 @@ export interface User {
   progress: Progress
 }
 
+export interface RegisterData {
+  email: string
+  full_name: string
+  password: string
+  position: string
+  mode: 'create' | 'join'
+  company_name: string
+  company_id: number | null
+}
+
+export interface Company {
+  id: number
+  name: string
+}
+
+export interface CompanyBrief extends Company {
+  employees: number
+}
+
 export interface Me {
   user: User
   is_admin: boolean
   subordinates: number
+  company: Company
 }
 
 export interface PlanItem {

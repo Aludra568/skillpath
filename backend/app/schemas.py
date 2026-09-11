@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 
@@ -27,10 +29,28 @@ class LoginRequest(BaseModel):
 
 
 class RegisterRequest(BaseModel):
+    """Регистрация двух видов: создать свою компанию или вступить в существующую."""
+
     email: EmailStr
     full_name: str = Field(min_length=1, max_length=200)
     password: str = Field(min_length=6, max_length=128)
     position: str = ""
+    # create — заводим компанию и становимся её администратором
+    # join   — вступаем в уже существующую компанию обычным сотрудником
+    mode: Literal["create", "join"] = "create"
+    company_name: str = ""
+    company_id: int | None = None
+
+
+class CompanyOut(ORMModel):
+    id: int
+    name: str
+
+
+class CompanyBrief(ORMModel):
+    id: int
+    name: str
+    employees: int = 0
 
 
 class ChangePassword(BaseModel):
@@ -140,6 +160,7 @@ class Me(BaseModel):
     user: UserOut
     is_admin: bool
     subordinates: int
+    company: CompanyOut
 
 
 # --- План -----------------------------------------------------------------

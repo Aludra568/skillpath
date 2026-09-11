@@ -27,10 +27,35 @@ client = TestClient(app)
 PASSWORD = "test12345"
 
 
-def register(email: str, name: str, position: str = "") -> dict[str, str]:
+def create_company(email: str, name: str, company: str, position: str = "") -> dict[str, str]:
+    """Регистрация владельца: заводит компанию и становится её администратором."""
     response = client.post(
         "/api/auth/register",
-        json={"email": email, "full_name": name, "password": PASSWORD, "position": position},
+        json={
+            "email": email,
+            "full_name": name,
+            "password": PASSWORD,
+            "position": position,
+            "mode": "create",
+            "company_name": company,
+        },
+    )
+    assert response.status_code == 201, response.text
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+def register(email: str, name: str, position: str = "", company_id: int | None = None) -> dict[str, str]:
+    """Регистрация сотрудника: вступает в существующую компанию."""
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "email": email,
+            "full_name": name,
+            "password": PASSWORD,
+            "position": position,
+            "mode": "join",
+            "company_id": company_id if company_id is not None else COMPANY_ID,
+        },
     )
     assert response.status_code == 201, response.text
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
@@ -48,10 +73,11 @@ def user_id(headers: dict[str, str]) -> int:
 
 # --- Сборка компании: ровно те шаги, что делает живой администратор ---------
 
-assert client.get("/api/auth/needs-setup").json()["empty"] is True
+assert client.get("/api/auth/companies").json() == []
 
-owner = register("owner@company.ru", "Ольга Владелец", "Директор")
+owner = create_company("owner@company.ru", "Ольга Владелец", "Ромашка", "Директор")
 owner_id = user_id(owner)
+COMPANY_ID = client.get("/api/auth/me", headers=owner).json()["company"]["id"]
 
 # Направления и скиллы.
 back = client.post("/api/directions", headers=owner, json={"code": "BACK", "name": "Backend"}).json()
@@ -143,12 +169,16 @@ client.patch(
 # --- Тесты -----------------------------------------------------------------
 
 
-def test_first_registered_is_admin():
-    assert client.get("/api/auth/me", headers=owner).json()["is_admin"] is True
-    assert client.get("/api/auth/needs-setup").json()["empty"] is False
+def test_company_creator_is_admin():
+    me = client.get("/api/auth/me", headers=owner).json()
+    assert me["is_admin"] is True
+    assert me["company"]["name"] == "Ромашка"
+    # Компания видна в списке для присоединения.
+    names = {c["name"] for c in client.get("/api/auth/companies").json()}
+    assert "Ромашка" in names
 
 
-def test_next_users_are_not_admins_and_have_no_department():
+def test_joined_users_are_not_admins_and_have_no_department():
     fresh = register("fresh@company.ru", "Новый Сотрудник")
     me = client.get("/api/auth/me", headers=fresh).json()
     assert me["is_admin"] is False
@@ -161,7 +191,13 @@ def test_next_users_are_not_admins_and_have_no_department():
 def test_duplicate_email_is_rejected():
     response = client.post(
         "/api/auth/register",
-        json={"email": "dev@company.ru", "full_name": "Двойник", "password": PASSWORD},
+        json={
+            "email": "dev@company.ru",
+            "full_name": "Двойник",
+            "password": PASSWORD,
+            "mode": "join",
+            "company_id": COMPANY_ID,
+        },
     )
     assert response.status_code == 409
 
@@ -169,7 +205,13 @@ def test_duplicate_email_is_rejected():
 def test_short_password_is_rejected():
     response = client.post(
         "/api/auth/register",
-        json={"email": "short@company.ru", "full_name": "Кто-то", "password": "123"},
+        json={
+            "email": "short@company.ru",
+            "full_name": "Кто-то",
+            "password": "123",
+            "mode": "create",
+            "company_name": "Коротышка",
+        },
     )
     assert response.status_code == 422
 
@@ -338,6 +380,57 @@ def test_events_have_meetings_and_deadlines():
     events = client.get("/api/events", headers=lead, params={"days": 45}).json()
     assert {e["kind"] for e in events} == {"meeting", "deadline"}
     assert events == sorted(events, key=lambda e: e["date"])
+
+
+def test_companies_are_isolated():
+    """Две компании в одной системе не видят данные друг друга."""
+    other_owner = create_company("boss@other.ru", "Борис Чужой", "Конкурент", "Директор")
+    other_id = client.get("/api/auth/me", headers=other_owner).json()["company"]["id"]
+    assert other_id != COMPANY_ID
+
+    # Новый администратор сразу видит свою компанию — и в ней только себя.
+    assert client.get("/api/auth/me", headers=other_owner).json()["is_admin"] is True
+    own_users = client.get("/api/users", headers=other_owner).json()
+    assert [u["full_name"] for u in own_users] == ["Борис Чужой"]
+
+    # Сотрудники и справочник чужой компании недоступны.
+    assert client.get(f"/api/users/{dev_id}", headers=other_owner).status_code == 403
+    assert client.get("/api/directions", headers=other_owner).json() == []
+    assert client.get("/api/skills", headers=other_owner).json() == []
+    assert client.get("/api/departments", headers=other_owner).json() == []
+    assert client.get("/api/analytics/departments", headers=other_owner).json() == []
+
+    # И наоборот: администратор первой компании не видит чужого сотрудника.
+    other_user_id = client.get("/api/auth/me", headers=other_owner).json()["user"]["id"]
+    assert client.get(f"/api/users/{other_user_id}", headers=owner).status_code == 403
+
+
+def test_cannot_join_unknown_company():
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "email": "nowhere@company.ru",
+            "full_name": "Никуда",
+            "password": PASSWORD,
+            "mode": "join",
+            "company_id": 999999,
+        },
+    )
+    assert response.status_code == 400
+
+
+def test_company_name_must_be_unique():
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "email": "dup@company.ru",
+            "full_name": "Дубль",
+            "password": PASSWORD,
+            "mode": "create",
+            "company_name": "ромашка",
+        },
+    )
+    assert response.status_code == 409
 
 
 if __name__ == "__main__":

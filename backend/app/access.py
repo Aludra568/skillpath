@@ -1,7 +1,11 @@
 """Права считаются относительно конкретного сотрудника, а не по глобальной роли.
 
-Всё строится на дереве подразделений: руководитель узла ведёт всех, кто есть
-в этом узле и во всех вложенных, на любую глубину.
+Два уровня ограничений:
+
+1. Компания. Пользователь не видит и не может тронуть ничего за пределами своей
+   компании — даже администратор. Компании полностью изолированы.
+2. Дерево подразделений внутри компании. Руководитель узла ведёт всех, кто есть
+   в этом узле и во всех вложенных, на любую глубину.
 """
 
 from __future__ import annotations
@@ -12,16 +16,24 @@ from sqlalchemy.orm import Session
 from .models import Department, User
 
 
-def _children(db: Session) -> dict[int | None, list[int]]:
+def company_departments(db: Session, company_id: int) -> list[Department]:
+    return list(
+        db.scalars(
+            select(Department).where(Department.company_id == company_id).order_by(Department.name)
+        ).all()
+    )
+
+
+def _children(db: Session, company_id: int) -> dict[int | None, list[int]]:
     children: dict[int | None, list[int]] = {}
-    for dept_id, parent_id in db.execute(select(Department.id, Department.parent_id)).all():
-        children.setdefault(parent_id, []).append(dept_id)
+    for dept in company_departments(db, company_id):
+        children.setdefault(dept.parent_id, []).append(dept.id)
     return children
 
 
-def subtree_ids(db: Session, root_id: int) -> set[int]:
+def subtree_ids(db: Session, company_id: int, root_id: int) -> set[int]:
     """Подразделение и все вложенные в него."""
-    children = _children(db)
+    children = _children(db, company_id)
     found: set[int] = set()
     stack = [root_id]
     while stack:
@@ -33,11 +45,11 @@ def subtree_ids(db: Session, root_id: int) -> set[int]:
     return found
 
 
-def department_path(db: Session, department_id: int | None) -> list[str]:
+def department_path(db: Session, company_id: int, department_id: int | None) -> list[str]:
     """Путь от корня до подразделения, для показа в интерфейсе."""
     if department_id is None:
         return []
-    by_id = {d.id: d for d in db.scalars(select(Department)).all()}
+    by_id = {d.id: d for d in company_departments(db, company_id)}
     path: list[str] = []
     current = by_id.get(department_id)
     while current is not None:
@@ -47,41 +59,55 @@ def department_path(db: Session, department_id: int | None) -> list[str]:
     return path
 
 
-def managed_department_ids(db: Session, actor: User) -> set[int] | None:
-    """Подразделения в зоне ответственности. None у админа — значит все."""
+def managed_department_ids(db: Session, actor: User) -> set[int]:
+    """Подразделения в зоне ответственности. У администратора — все в его компании."""
+    departments = company_departments(db, actor.company_id)
     if actor.is_admin:
-        return None
+        return {d.id for d in departments}
     result: set[int] = set()
-    for dept_id, head_id in db.execute(select(Department.id, Department.head_id)).all():
-        if head_id == actor.id:
-            result |= subtree_ids(db, dept_id)
+    for dept in departments:
+        if dept.head_id == actor.id:
+            result |= subtree_ids(db, actor.company_id, dept.id)
     return result
 
 
+def company_user_ids(db: Session, company_id: int) -> set[int]:
+    return set(db.scalars(select(User.id).where(User.company_id == company_id)).all())
+
+
 def subordinate_ids(db: Session, actor: User) -> set[int]:
-    """Все подчинённые, без самого actor."""
-    departments = managed_department_ids(db, actor)
-    query = select(User.id)
-    if departments is not None:
-        if not departments:
-            return set()
-        query = query.where(User.department_id.in_(departments))
-    return {user_id for user_id in db.scalars(query).all() if user_id != actor.id}
-
-
-def visible_user_ids(db: Session, actor: User) -> set[int] | None:
-    """Кого actor вправе видеть. None — всех."""
+    """Все подчинённые внутри компании, без самого actor."""
     if actor.is_admin:
-        return None
+        return company_user_ids(db, actor.company_id) - {actor.id}
+
+    departments = managed_department_ids(db, actor)
+    if not departments:
+        return set()
+    found = set(
+        db.scalars(
+            select(User.id).where(
+                User.company_id == actor.company_id, User.department_id.in_(departments)
+            )
+        ).all()
+    )
+    return found - {actor.id}
+
+
+def visible_user_ids(db: Session, actor: User) -> set[int]:
+    """Кого actor вправе видеть: себя и подчинённых, всегда внутри своей компании."""
     return subordinate_ids(db, actor) | {actor.id}
 
 
 def relation(db: Session, actor: User, employee_id: int) -> str:
     """admin | manager | self | none"""
-    if actor.is_admin:
-        return "admin"
     if actor.id == employee_id:
         return "self"
+    target = db.get(User, employee_id)
+    # Чужая компания недоступна никому, включая администратора.
+    if target is None or target.company_id != actor.company_id:
+        return "none"
+    if actor.is_admin:
+        return "admin"
     if employee_id in subordinate_ids(db, actor):
         return "manager"
     return "none"
@@ -103,7 +129,7 @@ def manager_of(db: Session, user: User) -> User | None:
     """
     if user.department_id is None:
         return None
-    departments = {d.id: d for d in db.scalars(select(Department)).all()}
+    departments = {d.id: d for d in company_departments(db, user.company_id)}
     current = departments.get(user.department_id)
     while current is not None:
         if current.head_id and current.head_id != user.id:

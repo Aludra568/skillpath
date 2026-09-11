@@ -12,14 +12,25 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class Company(Base):
+    """Компания. Данные разных компаний не пересекаются между собой."""
+
+    __tablename__ = "companies"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(160))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Direction(Base):
     """Направление: BACK, FRONT, QA."""
 
     __tablename__ = "directions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    code: Mapped[str] = mapped_column(String(32), unique=True)
+    code: Mapped[str] = mapped_column(String(32))
     name: Mapped[str] = mapped_column(String(128))
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"), index=True)
 
 
 class Skill(Base):
@@ -42,6 +53,7 @@ class Department(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(160))
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"), index=True)
     parent_id: Mapped[int | None] = mapped_column(
         ForeignKey("departments.id", ondelete="RESTRICT"), nullable=True
     )
@@ -61,6 +73,7 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(256))
     position: Mapped[str] = mapped_column(String(160), default="")
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"), index=True)
 
     direction_id: Mapped[int | None] = mapped_column(
         ForeignKey("directions.id", ondelete="SET NULL"), nullable=True
@@ -71,6 +84,7 @@ class User(Base):
 
     direction: Mapped[Direction | None] = relationship()
     department: Mapped[Department | None] = relationship(foreign_keys=[department_id])
+    company: Mapped[Company] = relationship()
 
 
 class Plan(Base):

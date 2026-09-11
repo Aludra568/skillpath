@@ -59,10 +59,9 @@ def list_meetings(
         query = query.where(Meeting.employee_id == employee_id)
     else:
         allowed = visible_user_ids(db, actor)
-        if allowed is not None:
-            query = query.where(
-                or_(Meeting.employee_id.in_(allowed or {-1}), Meeting.reviewer_id == actor.id)
-            )
+        query = query.where(
+            or_(Meeting.employee_id.in_(allowed or {-1}), Meeting.reviewer_id == actor.id)
+        )
     return db.scalars(query).all()
 
 
@@ -244,8 +243,7 @@ def list_issues(
         query = query.where(Issue.employee_id == employee_id)
     else:
         allowed = visible_user_ids(db, actor)
-        if allowed is not None:
-            query = query.where(Issue.employee_id.in_(allowed or {-1}))
+        query = query.where(Issue.employee_id.in_(allowed or {-1}))
     return [issue_out(issue) for issue in db.scalars(query).all()]
 
 

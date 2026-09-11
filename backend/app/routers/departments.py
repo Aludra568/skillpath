@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..access import managed_department_ids, subtree_ids
+from ..access import company_departments, managed_department_ids, subtree_ids
 from ..db import get_db
 from ..deps import admin_only, current_user
 from ..models import Department, User
@@ -13,15 +13,24 @@ from ..schemas import DepartmentIn, DepartmentNode, DepartmentOut, UserBrief
 router = APIRouter(prefix="/api/departments", tags=["departments"])
 
 
+def own_department(db: Session, admin: User, department_id: int) -> Department:
+    department = db.get(Department, department_id)
+    if department is None or department.company_id != admin.company_id:
+        raise HTTPException(404, "Подразделение не найдено")
+    return department
+
+
 @router.get("/tree", response_model=list[DepartmentNode])
 def tree(db: Session = Depends(get_db), actor: User = Depends(current_user)):
     """Дерево подразделений в зоне ответственности пользователя."""
     allowed = managed_department_ids(db, actor)
-    departments = db.scalars(select(Department).order_by(Department.name)).all()
-    if allowed is not None:
-        departments = [d for d in departments if d.id in allowed]
+    departments = [d for d in company_departments(db, actor.company_id) if d.id in allowed]
 
-    users = db.scalars(select(User).order_by(User.full_name)).all()
+    users = list(
+        db.scalars(
+            select(User).where(User.company_id == actor.company_id).order_by(User.full_name)
+        ).all()
+    )
     heads = {u.id: u.full_name for u in users}
 
     nodes: dict[int, DepartmentNode] = {}
@@ -51,19 +60,21 @@ def tree(db: Session = Depends(get_db), actor: User = Depends(current_user)):
 @router.get("", response_model=list[DepartmentOut])
 def list_departments(db: Session = Depends(get_db), actor: User = Depends(current_user)):
     allowed = managed_department_ids(db, actor)
-    departments = db.scalars(select(Department).order_by(Department.name)).all()
-    if allowed is not None:
-        departments = [d for d in departments if d.id in allowed]
-    return departments
+    return [d for d in company_departments(db, actor.company_id) if d.id in allowed]
 
 
 @router.post("", response_model=DepartmentOut, status_code=201)
 def add_department(
-    data: DepartmentIn, db: Session = Depends(get_db), _: User = Depends(admin_only)
+    data: DepartmentIn, db: Session = Depends(get_db), admin: User = Depends(admin_only)
 ):
-    if data.parent_id and db.get(Department, data.parent_id) is None:
-        raise HTTPException(400, "Родительское подразделение не найдено")
-    department = Department(name=data.name.strip(), parent_id=data.parent_id, head_id=data.head_id)
+    if data.parent_id:
+        own_department(db, admin, data.parent_id)
+    department = Department(
+        name=data.name.strip(),
+        parent_id=data.parent_id,
+        head_id=data.head_id,
+        company_id=admin.company_id,
+    )
     db.add(department)
     db.commit()
     db.refresh(department)
@@ -75,14 +86,14 @@ def edit_department(
     department_id: int,
     data: DepartmentIn,
     db: Session = Depends(get_db),
-    _: User = Depends(admin_only),
+    admin: User = Depends(admin_only),
 ):
-    department = db.get(Department, department_id)
-    if department is None:
-        raise HTTPException(404, "Подразделение не найдено")
+    department = own_department(db, admin, department_id)
     # Перенос внутрь собственного поддерева зациклил бы дерево.
-    if data.parent_id and data.parent_id in subtree_ids(db, department_id):
-        raise HTTPException(400, "Нельзя перенести подразделение внутрь самого себя")
+    if data.parent_id:
+        own_department(db, admin, data.parent_id)
+        if data.parent_id in subtree_ids(db, admin.company_id, department_id):
+            raise HTTPException(400, "Нельзя перенести подразделение внутрь самого себя")
     department.name = data.name.strip()
     department.parent_id = data.parent_id
     department.head_id = data.head_id
@@ -93,11 +104,9 @@ def edit_department(
 
 @router.delete("/{department_id}", status_code=204, response_model=None)
 def delete_department(
-    department_id: int, db: Session = Depends(get_db), _: User = Depends(admin_only)
+    department_id: int, db: Session = Depends(get_db), admin: User = Depends(admin_only)
 ) -> None:
-    department = db.get(Department, department_id)
-    if department is None:
-        raise HTTPException(404, "Подразделение не найдено")
+    department = own_department(db, admin, department_id)
     if db.scalar(select(Department).where(Department.parent_id == department_id)):
         raise HTTPException(409, "Сначала перенесите вложенные подразделения")
     if db.scalar(select(User).where(User.department_id == department_id)):

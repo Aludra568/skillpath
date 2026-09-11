@@ -30,7 +30,7 @@ export default function App() {
           <span className="mark">S</span>
           <div>
             SkillPath
-            <span>Performance Review</span>
+            <span>{me.company.name}</span>
           </div>
         </div>
 

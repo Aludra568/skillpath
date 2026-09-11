@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-import { api } from '../api'
+import { api, type CompanyBrief, type RegisterData } from '../api'
 import { useAuth } from '../auth'
 import { useAsync } from '../hooks'
 import { ErrorBox } from '../ui'
@@ -9,8 +9,7 @@ export default function LoginPage() {
   const { login, register } = useAuth()
   const [tab, setTab] = useState<'login' | 'register'>('login')
 
-  const setup = useAsync(() => api.get<{ empty: boolean }>('/api/auth/needs-setup'), [])
-  const isEmpty = setup.data?.empty === true
+  const companies = useAsync(() => api.get<CompanyBrief[]>('/api/auth/companies'), [])
 
   return (
     <div className="login">
@@ -19,16 +18,6 @@ export default function LoginPage() {
         <h1>SkillPath</h1>
       </div>
       <p className="small">Система мониторинга развития технических навыков</p>
-
-      {isEmpty ? (
-        <div className="box accent" style={{ marginTop: 16 }}>
-          <b>Система пустая</b>
-          <p className="small" style={{ margin: '4px 0 0' }}>
-            Первый зарегистрировавшийся становится администратором: заводит подразделения,
-            справочник скиллов и распределяет сотрудников.
-          </p>
-        </div>
-      ) : null}
 
       <div className="box">
         <div className="row" style={{ marginBottom: 14 }}>
@@ -51,7 +40,7 @@ export default function LoginPage() {
         {tab === 'login' ? (
           <LoginForm onSubmit={login} />
         ) : (
-          <RegisterForm onSubmit={register} isFirst={isEmpty} />
+          <RegisterForm onSubmit={register} companies={companies.data ?? []} />
         )}
       </div>
     </div>
@@ -113,16 +102,14 @@ function LoginForm({
 
 function RegisterForm({
   onSubmit,
-  isFirst,
+  companies,
 }: {
-  onSubmit: (data: {
-    email: string
-    full_name: string
-    password: string
-    position: string
-  }) => Promise<void>
-  isFirst: boolean
+  onSubmit: (data: RegisterData) => Promise<void>
+  companies: CompanyBrief[]
 }) {
+  const [mode, setMode] = useState<'create' | 'join'>('create')
+  const [companyName, setCompanyName] = useState('')
+  const [companyId, setCompanyId] = useState<number | ''>('')
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
   const [position, setPosition] = useState('')
@@ -137,10 +124,22 @@ function RegisterForm({
       setError('Пароли не совпадают')
       return
     }
+    if (mode === 'join' && companyId === '') {
+      setError('Выберите компанию')
+      return
+    }
     setBusy(true)
     setError(null)
     try {
-      await onSubmit({ email, full_name: fullName, password, position })
+      await onSubmit({
+        email,
+        full_name: fullName,
+        password,
+        position,
+        mode,
+        company_name: mode === 'create' ? companyName : '',
+        company_id: mode === 'join' ? Number(companyId) : null,
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось зарегистрироваться')
     } finally {
@@ -151,6 +150,69 @@ function RegisterForm({
   return (
     <form onSubmit={submit}>
       <ErrorBox text={error} />
+
+      <div className="row" style={{ marginBottom: 12 }}>
+        <button
+          type="button"
+          className={mode === 'create' ? 'small' : 'grey small'}
+          onClick={() => setMode('create')}
+        >
+          Создать компанию
+        </button>
+        <button
+          type="button"
+          className={mode === 'join' ? 'small' : 'grey small'}
+          onClick={() => setMode('join')}
+        >
+          Присоединиться
+        </button>
+      </div>
+
+      {mode === 'create' ? (
+        <>
+          <p className="small" style={{ marginTop: 0 }}>
+            Вы заводите компанию и становитесь её администратором: создаёте подразделения,
+            справочник скиллов и добавляете сотрудников.
+          </p>
+          <label>
+            <span>Название компании</span>
+            <input
+              value={companyName}
+              onChange={(e) => setCompanyName(e.target.value)}
+              placeholder="ООО «Ромашка»"
+              required
+            />
+          </label>
+        </>
+      ) : (
+        <>
+          <p className="small" style={{ marginTop: 0 }}>
+            Вы вступаете как сотрудник. Пока администратор не добавит вас в подразделение, вы
+            видите только себя.
+          </p>
+          <label>
+            <span>Компания</span>
+            <select
+              value={companyId}
+              onChange={(e) => setCompanyId(e.target.value === '' ? '' : Number(e.target.value))}
+              required
+            >
+              <option value="">Выберите компанию…</option>
+              {companies.map((company) => (
+                <option key={company.id} value={company.id}>
+                  {company.name} ({company.employees})
+                </option>
+              ))}
+            </select>
+          </label>
+          {companies.length === 0 ? (
+            <p className="small">
+              Пока ни одной компании не создано — выберите «Создать компанию».
+            </p>
+          ) : null}
+        </>
+      )}
+
       <label>
         <span>ФИО</span>
         <input
@@ -200,13 +262,12 @@ function RegisterForm({
         />
       </label>
       <button type="submit" disabled={busy}>
-        {busy ? 'Регистрируем…' : isFirst ? 'Зарегистрироваться как владелец' : 'Зарегистрироваться'}
+        {busy
+          ? 'Регистрируем…'
+          : mode === 'create'
+            ? 'Создать компанию'
+            : 'Присоединиться к компании'}
       </button>
-      {!isFirst ? (
-        <p className="small" style={{ marginBottom: 0 }}>
-          После регистрации администратор добавит вас в подразделение и назначит направление.
-        </p>
-      ) : null}
     </form>
   )
 }
