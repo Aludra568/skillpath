@@ -210,10 +210,20 @@ export default function MeetingPage() {
                     <li key={item.id} className="item">
                       <span className="grow">
                         {item.skill.name}
+                        {/* Скилл могли зачесть на другой встрече — показываем это,
+                            чтобы руководитель не зачитывал его повторно. */}
+                        {item.is_confirmed && !mark?.is_confirmed ? (
+                          <span className="tag green" style={{ marginLeft: 8 }}>
+                            уже зачтён
+                          </span>
+                        ) : null}
                         <div className="small">
                           план до {new Date(item.target_date).toLocaleDateString('ru-RU')}
                           {mark && !mark.is_confirmed ? ' · обсуждали' : ''}
                           {mark?.is_confirmed ? ' · зачтён на этой встрече' : ''}
+                          {item.is_confirmed && !mark?.is_confirmed && item.confirmed_at
+                            ? ` · зачтён ${new Date(item.confirmed_at).toLocaleDateString('ru-RU')}`
+                            : ''}
                         </div>
                       </span>
 
