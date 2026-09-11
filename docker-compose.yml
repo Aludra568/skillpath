@@ -1,0 +1,21 @@
+services:
+  skillpath:
+    build: .
+    image: skillpath:latest
+    container_name: skillpath
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      DATA_DIR: /data
+    volumes:
+      - skillpath-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  skillpath-data:
